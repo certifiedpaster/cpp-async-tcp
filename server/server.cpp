@@ -202,7 +202,7 @@ namespace forceinline::socket {
 
 		//Packet ID is in the first 2 bytes while its size is in the following 2
 		std::uint16_t packet_id = packet_information & 0xFFFF;
-		std::uint16_t packet_size = packet_information & 0xFFFF0000;
+		std::uint16_t packet_size = ( packet_information >> 16 ) & 0xFFFF;
 
 		//Add the first 4 bytes to our packet size
 		std::uint16_t total_packet_size = packet_size + 2 * sizeof std::uint16_t;
