@@ -1,49 +1,39 @@
 #include "client/client.h"
 #include <iostream>
 
-void handler_packet_dynamic( std::vector< char > buffer, forceinline::socket::async_client* client ) {
-	forceinline::socket::packet_dynamic packet( buffer );
-	auto data = packet.get_packet( );
-
-	printf( "%i | %i:\n", data.container_length, data.some_container.size( ) );
-	for ( auto& v : data.some_container )
-		printf( "%i\n", v );
-
-	printf( "\n" );
+int pkt = 0;
+void handler_packet_simple( std::vector< char > buffer, forceinline::socket::async_client* client ) {
+	forceinline::socket::packet_simple packet( buffer );
+	printf( "%i | %i\n", ++pkt, packet.m_data.some_number );
 }
 
 int main( ) {
 	try {
 		forceinline::socket::async_client client( "localhost", "1337" );
-		client.set_packet_handler( forceinline::socket::packet_id::dynamic, handler_packet_dynamic );
+		client.set_packet_handler( forceinline::socket::packet_id::simple, handler_packet_simple );
 		
 		client.connect( );
-		while ( client.is_connected( ) ) {
-			std::cin.get( );
-			forceinline::socket::packet_dynamic_t packet_data;
+		if ( client.is_connected( ) ) {
+			for ( int i = 1; i <= 250; i++ ) {
+				forceinline::socket::packet_simple_t packet_data;
 
-			srand( rand( ) );
-			auto to_insert = ( rand( ) % 5 ) + 1;
+				packet_data.some_float = 123.456f;
+				packet_data.some_number = i;
+				memset( packet_data.some_array, 2, 3 );
 
-			for ( int i = 0; i < to_insert; i++ )
-				packet_data.some_container.push_back( rand( ) % 256 );
+				forceinline::socket::packet_simple packet( packet_data );
+				client.send_packet( &packet );
+			}
 
-			printf( "Container data [%i]:\n", to_insert );
-
-			for ( auto& v: packet_data.some_container )
-				printf( "%i\n", v );
-
-			printf( "--------------\n" );
-
-			forceinline::socket::packet_dynamic packet( packet_data );
-			client.send_packet( &packet );
+			while ( client.is_connected( ) ) {
+				std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+			}
 		}
-
-		client.disconnect( );
 	} catch ( const std::exception& e ) {
 		std::cout << e.what( ) << std::endl;
 		std::cin.get( );
 	}
 
+	std::cin.get( );
 	return 0;
 }

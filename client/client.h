@@ -33,21 +33,21 @@ namespace forceinline::socket {
 
 	private:
 		void receive( );
+		void process_packets( );
 
 		bool m_connected = false;
-		int m_bytes_received = 0;
 
 		SOCKET m_socket = 0;
 		WSADATA m_wsa_data = { };
 
-		std::thread m_receive_thread;
+		std::thread m_receive_thread, m_process_thread;
 
 		std::string m_ip = "", m_port = "";
 
-		std::mutex m_mtx;
+		std::mutex m_send_mtx, m_process_mtx;
 
-		const std::uint16_t m_packet_size = 4096;
-		std::vector< char > m_buffer = { };
+		const std::uint16_t m_buffer_size = 4096;
+		std::vector< char > m_packet_queue = { };
 
 		std::unordered_map< int, packet_handler_client_fn > m_packet_handlers = { };
 	};

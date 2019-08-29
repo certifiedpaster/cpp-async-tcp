@@ -1,26 +1,20 @@
 #include "server/server.h"
 #include <iostream>
 
-void handler_packet_dynamic( SOCKET from, std::vector< char > buffer, forceinline::socket::async_server* server ) {
-	forceinline::socket::packet_dynamic packet( buffer );
-	auto data = packet.get_packet( );
-
-	printf( "%i | %i\n", data.container_length, data.some_container.size( ) );
-	for ( auto& v : data.some_container )
-		printf( "%i\n", v );
-
-	printf( "\n" );
-
+int pkt = 0;
+void handler_packet_simple( SOCKET from, std::vector< char > buffer, forceinline::socket::async_server* server ) {
+	forceinline::socket::packet_simple packet( buffer );
+	printf( "%i | %i\n", ++pkt, packet.m_data.some_number );
 	server->send_packet( from, &packet );
 }
 
 int main( ) {
 	try {
 		forceinline::socket::async_server server( "1337" );
-		server.set_packet_handler( forceinline::socket::packet_id::dynamic, handler_packet_dynamic );
+		server.set_packet_handler( forceinline::socket::packet_id::simple, handler_packet_simple );
 
 		server.start( );
-		while ( server.is_running( ) ) {
+		while ( server.is_running( ) && !GetAsyncKeyState( 'A' ) ) {
 			std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
 		}
 
@@ -30,5 +24,6 @@ int main( ) {
 		std::cin.get( );
 	}
 
+	std::cout << "ez guys";
 	return 0;
 }

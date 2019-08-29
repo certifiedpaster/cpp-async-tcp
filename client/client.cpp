@@ -14,53 +14,59 @@ namespace forceinline::socket {
 	}
 
 	async_client::~async_client( ) {
-		if ( m_receive_thread.joinable( ) )
-			m_receive_thread.join( );
-
-		m_buffer.clear( );
-		
 		disconnect( );
+		m_packet_handlers.clear( );
 	}
 
 	void async_client::connect( ) {
 		if ( m_connected )
-			throw std::exception( "async_client::connect: already connected" );
+			return;
 
-		if ( WSAStartup( MAKEWORD( 2, 2 ), &m_wsa_data ) != 0 )									
-			throw std::exception( "async_client::connect: WSAStartup call failed" );		
-																								
-		struct addrinfo hints, * result;														
-		ZeroMemory( &hints, sizeof( hints ) );													
-																								
-		hints.ai_family = AF_INET;																
-		hints.ai_socktype = SOCK_STREAM;														
-		hints.ai_protocol = IPPROTO_TCP;														
-																								
-		if ( getaddrinfo( m_ip.data( ), m_port.data( ), &hints, &result ) != 0 )				
-			throw std::exception( "async_client::connect: getaddrinfo call failed" );	
-																								
-		m_socket = ::socket( result->ai_family, result->ai_socktype, result->ai_protocol );		
-																								
-		if ( m_socket == INVALID_SOCKET )														
-			throw std::exception( "async_client::connect: socket creation failed" );		
-																								
+		if ( WSAStartup( MAKEWORD( 2, 2 ), &m_wsa_data ) != 0 )
+			throw std::exception( "async_client::connect: WSAStartup call failed" );
+
+		struct addrinfo hints, * result;
+		ZeroMemory( &hints, sizeof( hints ) );
+
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_STREAM;
+		hints.ai_protocol = IPPROTO_TCP;
+
+		if ( getaddrinfo( m_ip.data( ), m_port.data( ), &hints, &result ) != 0 )
+			throw std::exception( "async_client::connect: getaddrinfo call failed" );
+
+		m_socket = ::socket( result->ai_family, result->ai_socktype, result->ai_protocol );
+
+		if ( m_socket == INVALID_SOCKET )
+			throw std::exception( "async_client::connect: socket creation failed" );
+
 		if ( ::connect( m_socket, result->ai_addr, int( result->ai_addrlen ) ) == SOCKET_ERROR )
-			throw std::exception( "async_client::connect: failed to connect to host" );	
+			throw std::exception( "async_client::connect: failed to connect to host" );
 
 		freeaddrinfo( result );
 
 		m_connected = true;
 		m_receive_thread = std::thread( &async_client::receive, this );
+		m_process_thread = std::thread( &async_client::process_packets, this );
 	}
 
 	void async_client::disconnect( ) {
-		if ( !m_connected || !m_socket )
-			return;
-		
-		shutdown( m_socket, SD_SEND );
-		closesocket( m_socket );
-		
 		m_connected = false;
+
+		//Wait for our threads to finish
+		if ( m_receive_thread.joinable( ) )
+			m_receive_thread.join( );
+
+		if ( m_process_thread.joinable( ) )
+			m_process_thread.join( );
+
+		//Tell the server we disconnected
+		if ( m_socket ) {
+			shutdown( m_socket, SD_SEND );
+			closesocket( m_socket );
+			m_socket = NULL;
+		}
+
 		WSACleanup( );
 	}
 
@@ -80,9 +86,6 @@ namespace forceinline::socket {
 		if ( !packet )
 			return;
 
-		//Lock the mutex
-		m_mtx.lock( );
-
 		//Grab our packet size and ID
 		auto packet_id = packet->id( );
 		auto packet_size = packet->size( );
@@ -97,6 +100,9 @@ namespace forceinline::socket {
 		//Finally copy our packet data into the buffer
 		memcpy( packet_buffer.data( ) + 2 * sizeof std::uint16_t, packet->data( ), packet_size );
 
+		//Lock the send function for other threads until we're done
+		std::unique_lock lock( m_send_mtx );
+
 		//Try to send our buffer
 		std::size_t bytes_sent = 0, total_bytes_sent = 0;
 		do {
@@ -106,79 +112,75 @@ namespace forceinline::socket {
 
 		//An error occurred, disconnect from server
 		if ( bytes_sent <= 0 )
-			disconnect( );
-
-		//Unlock our mutex so the next packet can be sent
-		m_mtx.unlock( );
+			m_connected = false;
 	}
 
-	//fixme: receive ALL packets, not just the expected ones
 	void async_client::receive( ) {
-		assert( m_connected );
+		//Create a temporary buffer
+		std::vector< char > temporary_buffer = std::vector< char >( m_buffer_size );
 
-		auto receive = [ & ]( std::uint16_t size, char* buffer ) {		
-			int received = 0, total_received = 0;
-
-			//Try to receive as much as we requested
-			do {
-				received = recv( m_socket, buffer + total_received, size - total_received, NULL );
-				total_received += received;
-			} while ( received > 0 && total_received < size );
-
-			//Did we receive what we requested?
-			return total_received == size;
-		};
-
-		do {	
-			//Clear and prepare the buffer
-			m_buffer.clear( );
-			m_buffer.resize( m_packet_size );
-
+		//Loop and receive
+		do {
 			//Check how many bytes we have received
-			m_bytes_received = recv( m_socket, m_buffer.data( ), m_buffer.size( ), NULL );
+			int bytes_received = recv( m_socket, temporary_buffer.data( ), m_buffer_size, NULL );
 
-			//We haven't received enough information about our packet, try to get more
-			if ( m_bytes_received < 4 ) {
-				//We failed to receive enough bytes, disconnect as an error has occurred
-				if ( !receive( 4 - m_bytes_received, m_buffer.data( ) + m_bytes_received ) )
+			//An error occurred, break out and disconnect
+			if ( bytes_received <= 0 )
+				break;
+			
+			//Lock the process mutex
+			std::unique_lock lock( m_process_mtx );
+
+			//Copy the received bytes into our queue
+			m_packet_queue.insert( m_packet_queue.end( ), temporary_buffer.data( ), temporary_buffer.data( ) + bytes_received );
+
+		} while ( m_connected );
+
+		//Clear the temporary buffer and disconnect
+		temporary_buffer.clear( );
+		m_connected = false;
+	}
+
+	void async_client::process_packets( ) {
+		while ( m_connected ) {
+			std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+			std::unique_lock lock( m_process_mtx );
+
+			//Check if we have at least a packet header stored
+			if ( m_packet_queue.size( ) < 2 * sizeof std::uint16_t )
+				continue;
+
+			//We have something to process
+			do {
+				//Get the information about our packet
+				std::uint32_t packet_information = *reinterpret_cast< std::uint32_t* >( m_packet_queue.data( ) );
+
+				//Packet ID is in the first 2 bytes while its size is in the following 2
+				std::uint16_t packet_id = packet_information & 0xFFFF;
+				std::uint16_t packet_size = ( packet_information >> 16 );
+
+				//Add the first 4 bytes to our packet size
+				std::uint16_t total_packet_size = packet_size + 2 * sizeof std::uint16_t;
+
+				//Do we have a whole packet stored?
+				if ( m_packet_queue.size( ) < total_packet_size )
 					break;
-			} 
 
-			//Get the information about our packet
-			std::uint32_t packet_information = *reinterpret_cast< std::uint32_t* >( m_buffer.data( ) );
+				//Does our packet have a handler?
+				if ( m_packet_handlers.find( packet_id ) != m_packet_handlers.end( ) ) {
+					//Erase the packet header
+					m_packet_queue.erase( m_packet_queue.begin( ), m_packet_queue.begin( ) + 2 * sizeof std::uint16_t );
 
-			//Packet ID is in the first 2 bytes while its size is in the following 2
-			std::uint16_t packet_id = packet_information & 0xFFFF;
-			std::uint16_t packet_size = ( packet_information >> 16 ) & 0xFFFF;
+					//Call the handler
+					m_packet_handlers[ packet_id ]( m_packet_queue, this );
 
-			//Add the first 4 bytes to our packet size
-			std::uint16_t total_packet_size = packet_size + 2 * sizeof std::uint16_t;
-
-			//The packet is larger than our buffer for it
-			if ( total_packet_size > m_buffer.size( ) ) {
-				//Resize the buffer accordingly
-				m_buffer.insert( m_buffer.end( ), total_packet_size - m_buffer.size( ), 0 );
-			}
-
-			//We haven't received the whole packet, keep listening
-			if ( m_bytes_received < packet_size ) {
-				//Failed to receive whole packet, error -> disconnect
-				if ( !receive( packet_size - m_bytes_received, m_buffer.data( ) + m_bytes_received ) )
-					break;
-			}		
-
-			//Does a handler exist for the packet?
-			if ( m_packet_handlers.find( packet_id ) != m_packet_handlers.end( ) ) {
-				//Remove the first four bytes from our buffer as we only pass the packet data to our handler
-				m_buffer.erase( m_buffer.begin( ), m_buffer.begin( ) + 4 );
-
-				//Copy the buffer and call the packet handler
-				m_packet_handlers[ packet_id ]( m_buffer, this );
-			}
-
-		} while ( m_connected && m_bytes_received > 0 );
-
-		//An error occurred or the connection was closed by the server, disconnect
-		disconnect( );
+					//Remove the packet from our queue
+					m_packet_queue.erase( m_packet_queue.begin( ), m_packet_queue.begin( ) + packet_size );
+				} else {
+					//Packet is invalid/has no handler, erase it
+					m_packet_queue.erase( m_packet_queue.begin( ), m_packet_queue.begin( ) + total_packet_size );
+				}
+			} while ( m_packet_queue.size( ) > 2 * sizeof std::uint16_t );
+		}
 	}
 }

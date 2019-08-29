@@ -33,8 +33,7 @@ namespace forceinline::socket {
 	private:
 		void accept( );
 		void receive( );
-
-		bool receive_from_client( SOCKET from );
+		void process_packets( );
 
 		void close_client_connection( SOCKET client );
 
@@ -44,16 +43,16 @@ namespace forceinline::socket {
 		SOCKET m_server_socket = 0;
 		WSADATA m_wsa_data = { };
 
-		std::thread m_accept_thread, m_receive_thread;
+		std::thread m_accept_thread, m_receive_thread, m_process_thread;
 
 		std::string m_port = "";
 
-		std::mutex m_send_mtx, m_client_mtx;
+		std::mutex m_send_mtx, m_client_mtx, m_process_mtx;
 
-		const std::uint16_t m_packet_size = 4096;
-		std::vector< char > m_buffer = { };
+		const std::uint16_t m_buffer_size = 4096;
 
 		std::vector< SOCKET > m_connected_clients = { };
+		std::unordered_map< SOCKET, std::vector< char > > m_packet_queue = { };
 
 		std::unordered_map< int, packet_handler_server_fn > m_packet_handlers = { };
 	};
