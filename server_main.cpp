@@ -14,7 +14,7 @@ int main( ) {
 		server.set_packet_handler( forceinline::socket::packet_id::simple, handler_packet_simple );
 
 		server.start( );
-		while ( server.is_running( ) && !GetAsyncKeyState( 'A' ) ) {
+		while ( server.is_running( ) ) {
 			std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
 		}
 
@@ -24,6 +24,5 @@ int main( ) {
 		std::cin.get( );
 	}
 
-	std::cout << "ez guys";
 	return 0;
 }

@@ -109,7 +109,7 @@ namespace forceinline::socket {
 	*/
 
 	struct packet_simple_t {
-		int some_number = 0;
+		std::uint32_t some_number = 0;
 		float some_float = 0.f;
 		char some_array[ 3 ] = { };
 	};
@@ -130,7 +130,7 @@ namespace forceinline::socket {
 	*/
 
 	struct packet_dynamic_t {
-		std::size_t container_length = 0;
+		std::uint32_t container_length = 0;
 		std::vector< std::uint8_t > some_container = { };
 	};
 
@@ -156,8 +156,8 @@ namespace forceinline::socket {
 			m_data.container_length = m_data.some_container.size( );
 
 			//Copy the size of the container and its data into the buffer
-			memcpy( m_raw_data, &m_data.container_length, sizeof std::size_t );
-			memcpy( m_raw_data + sizeof std::size_t, m_data.some_container.data( ), m_data.some_container.size( ) * sizeof std::uint8_t );
+			memcpy( m_raw_data, &m_data.container_length, sizeof std::uint32_t );
+			memcpy( m_raw_data + sizeof std::uint32_t, m_data.some_container.data( ), m_data.some_container.size( ) * sizeof std::uint8_t );
 
 			return m_raw_data;
 		}
@@ -166,7 +166,7 @@ namespace forceinline::socket {
 			//Calculate size just once as our data will never change
 			if ( !m_packet_size ) {
 				//Add all items together
-				m_packet_size += sizeof std::size_t;
+				m_packet_size += sizeof std::uint32_t;
 				m_packet_size += m_data.some_container.size( ) * sizeof std::uint8_t;
 			}
 			
@@ -176,13 +176,13 @@ namespace forceinline::socket {
 
 		virtual void read( std::vector< char >& buffer ) {
 			//See how many elements our container has
-			m_data.container_length = *reinterpret_cast< std::size_t* >( buffer.data( ) );
+			m_data.container_length = *reinterpret_cast< std::uint32_t* >( buffer.data( ) );
 			
 			//Resize our container accordingly
 			m_data.some_container.resize( m_data.container_length, 0 );
 			
 			//Copy the container data into our container
-			memcpy( m_data.some_container.data( ), buffer.data( ) + sizeof std::size_t, m_data.container_length * sizeof std::uint8_t );
+			memcpy( m_data.some_container.data( ), buffer.data( ) + sizeof std::uint32_t, m_data.container_length * sizeof std::uint8_t );
 		}
 
 		packet_dynamic_t get_packet( ) {
