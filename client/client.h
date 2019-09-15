@@ -13,7 +13,7 @@
 
 #pragma comment (lib, "Ws2_32.lib")
 
-namespace forceinline::socket {
+namespace forceinline::remote {
 	class async_client;
 	typedef void( *packet_handler_client_fn )( std::vector< char > data, async_client* client );
 
@@ -30,6 +30,7 @@ namespace forceinline::socket {
 		void set_packet_handler( std::uint16_t packet_id, packet_handler_client_fn handler );
 
 		void send_packet( base_packet* packet );
+		void request_packet( std::uint16_t packet_id );
 
 	private:
 		void receive( );

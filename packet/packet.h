@@ -47,7 +47,7 @@ public:																 	  \
 	};																	  \
 };																		
 
-namespace forceinline::socket {
+namespace forceinline::remote {
 	class base_packet {
 	public:
 		//This method returns a pointer to the raw data of our packet
@@ -60,7 +60,7 @@ namespace forceinline::socket {
 		virtual void read( std::vector< char >& buffer ) = 0;
 
 		//This method returns our packet ID
-		std::uint16_t id( ) {
+		virtual std::uint16_t id( ) {
 			return m_packet_id;
 		}
 
@@ -136,7 +136,14 @@ namespace forceinline::socket {
 
 	/*
 		Here our class will be implemented. Because every dynamic packet will be different,
-		we have to 
+		we have to create a class for each one.
+
+		If you have similar packets (for example a simple text stream), remember that if you
+		use a typedef you have to send another form of packet ID to distinguish between them.
+
+		Alternatively, you could make a new class which inherits from your text stream class,
+		in which you simply override the virtual get_id method which will make it call a different
+		packet handler.
 	*/
 
 	class packet_dynamic : public base_packet {

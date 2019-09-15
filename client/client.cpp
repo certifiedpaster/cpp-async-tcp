@@ -1,7 +1,7 @@
 #include "client.h"
 #include <cassert>
 
-namespace forceinline::socket {
+namespace forceinline::remote {
 	async_client::async_client( std::string_view ip, std::string_view port ) {
 		if ( ip.empty( ) )
 			throw std::invalid_argument( "async_client::async_client: ip argument is empty" );
@@ -99,6 +99,34 @@ namespace forceinline::socket {
 
 		//Finally copy our packet data into the buffer
 		memcpy( packet_buffer.data( ) + 2 * sizeof std::uint16_t, packet->data( ), packet_size );
+
+		//Lock the send function for other threads until we're done
+		std::unique_lock lock( m_send_mtx );
+
+		//Try to send our buffer
+		std::size_t bytes_sent = 0, total_bytes_sent = 0;
+		do {
+			bytes_sent = send( m_socket, packet_buffer.data( ) + total_bytes_sent, packet_buffer.size( ) - total_bytes_sent, NULL );
+			total_bytes_sent += bytes_sent;
+		} while ( bytes_sent > 0 && total_bytes_sent < packet_buffer.size( ) );
+
+		//An error occurred, disconnect from server
+		if ( bytes_sent <= 0 )
+			m_connected = false;
+	}
+
+	/*
+		This function is used for when you ask for a packet. Example:
+		You have a client that downloads a configuration remotely. Instead of
+		sending the configuration when a client connects to the server,
+		the client simply sends a request to the server whenever it needs
+		the configuration.
+	*/
+	void async_client::request_packet( std::uint16_t packet_id ) {
+		std::vector< char > packet_buffer( 2 * sizeof std::uint16_t );
+
+		memset( packet_buffer.data( ), 0, packet_buffer.size( ) );
+		memcpy( packet_buffer.data( ), &packet_id, sizeof std::uint16_t );
 
 		//Lock the send function for other threads until we're done
 		std::unique_lock lock( m_send_mtx );

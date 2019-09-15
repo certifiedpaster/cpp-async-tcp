@@ -1,7 +1,7 @@
 #include "server.h"
 #include <algorithm>
 
-namespace forceinline::socket {
+namespace forceinline::remote {
 	async_server::async_server( std::string_view port ) {
 		if ( port.empty( ) )
 			throw std::invalid_argument( "async_server::async_server: port argument empty" );
@@ -115,6 +115,31 @@ namespace forceinline::socket {
 
 		//Finally copy our packet data into the buffer
 		memcpy( packet_buffer.data( ) + 2 * sizeof std::uint16_t, packet->data( ), packet_size );
+
+		//Try to send our buffer
+		std::size_t bytes_sent = 0, total_bytes_sent = 0;
+		do {
+			bytes_sent = send( to, packet_buffer.data( ) + total_bytes_sent, packet_buffer.size( ) - total_bytes_sent, NULL );
+			total_bytes_sent += bytes_sent;
+		} while ( bytes_sent > 0 && total_bytes_sent < packet_buffer.size( ) );
+
+		//An error occurred, remove the client
+		if ( bytes_sent <= 0 )
+			close_client_connection( to );
+	}
+
+	/*
+		This function is used for when you ask for a packet. See the client's
+		implementation for an explanation.
+	*/
+	void async_client::request_packet( SOCKET to, std::uint16_t packet_id ) {
+		std::vector< char > packet_buffer( 2 * sizeof std::uint16_t );
+
+		memset( packet_buffer.data( ), 0, packet_buffer.size( ) );
+		memcpy( packet_buffer.data( ), &packet_id, sizeof std::uint16_t );
+
+		//Lock the send function for other threads until we're done
+		std::unique_lock lock( m_send_mtx );
 
 		//Try to send our buffer
 		std::size_t bytes_sent = 0, total_bytes_sent = 0;
