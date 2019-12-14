@@ -1,12 +1,19 @@
 #pragma once
 #include <vector>
 
+/*
+ 	IMPORTANT NOTE:
+ 	It is recommended to share this file between server and client. This means,
+ 	you should link to this exact file in both of your projects for both the
+ 	client and server to have the same packet information at all times.
+*/
+
 /*	
 	Example packet layout (x = 1 byte)
 	[	
 		xx		type: uint16, specifies packet id
 		xx		type: uint16, specifies packet data length
-		xx...	type: uint8[], byte array with length of above mentioned byte
+		xx...	type: uint8[], byte array with length of above mentioned length
 	]
 */
 
@@ -50,22 +57,25 @@ public:																 	  \
 namespace forceinline::remote {
 	class base_packet {
 	public:
-		//This method returns a pointer to the raw data of our packet
+		// This method returns a pointer to the raw data of our packet
 		virtual char* data( ) = 0;
 
-		//This method returns the size of our packet
+		// This method returns the size of our packet
 		virtual std::uint16_t size( ) = 0;
 		
-		//This method converts our buffer into usable data
+		// This method converts our buffer into usable data
 		virtual void read( std::vector< char >& buffer ) = 0;
 
-		//This method returns our packet ID
+		// This method returns our packet ID
 		virtual std::uint16_t id( ) {
 			return m_packet_id;
 		}
 
 	protected:
 		std::uint16_t m_packet_id = 0;
+
+	private:
+
 	};
 
 	/*
@@ -86,7 +96,7 @@ namespace forceinline::remote {
 		First one is a simple packet which can be implemented with the given macro.
 
 		The second packet has items of varying size. It shows an example of
-		how such a packet could be send and specifically read.
+		how such a packet could be sent and specifically read.
 
 		----------------------------------------------------------------------------------
 
