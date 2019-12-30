@@ -68,9 +68,14 @@ namespace forceinline::remote {
 		m_running = false;
 
 		// Wait for our threads to finish
-		m_accept_thread.join( );
-		m_receive_thread.join( );
-		m_process_thread.join( );
+		if ( m_accept_thread.joinable( ) )
+			m_accept_thread.join( );
+
+		if ( m_receive_thread.joinable( ) )
+			m_receive_thread.join( );
+		
+		if ( m_process_thread.joinable( ) )
+			m_process_thread.join( );
 
 		// Shut down the connection
 		for ( auto& client_socket : m_connected_clients ) {
