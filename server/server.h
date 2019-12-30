@@ -29,7 +29,7 @@ namespace forceinline::remote {
 		void set_packet_handler( std::uint16_t packet_id, packet_handler_server_fn handler );
 
 		void send_packet( SOCKET to, base_packet* packet );
-		void request_packet( std::uint16_t packet_id );
+		void request_packet( SOCKET to, std::uint16_t packet_id );
 
 	private:
 		void accept( );

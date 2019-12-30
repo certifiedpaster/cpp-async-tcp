@@ -6,55 +6,74 @@
  	It is recommended to share this file between server and client. This means,
  	you should link to this exact file in both of your projects for both the
  	client and server to have the same packet information at all times.
-*/
-
-/*	
+	
 	Example packet layout (x = 1 byte)
 	[	
 		xx		type: uint16, specifies packet id
 		xx		type: uint16, specifies packet data length
 		xx...	type: uint8[], byte array with length of above mentioned length
 	]
-*/
-
-#define default_packet_constructors( packet_name, packet_struct, packet_id ) \
-packet_name( std::vector< char >& _data ) {		 							 \
-	m_packet_id = packet_id;			 					                 \
-	read( _data );		 									  				 \
-}															  				 \
-															  				 \
-packet_name( const packet_struct& _struct ) {				  				 \
-	m_packet_id = packet_id;								  				 \
-	m_data = _struct;										  				 \
-}
-
-#define create_packet_basic( packet_name, packet_struct, packet_id )	  \
-class packet_name : public base_packet {				 				  \
-public:																 	  \
-	default_packet_constructors( packet_name, packet_struct, packet_id ); \
-																		  \
-	virtual char* data( ) {						  						  \
-		return m_raw_data;												  \
-	}																 	  \
-																	 	  \
-	virtual std::uint16_t size( ) {									 	  \
-		return sizeof packet_struct;									  \
-	}																 	  \
-																	 	  \
-	virtual void read( std::vector< char >& buffer ) {		 			  \
-		if ( !buffer.data( ) || buffer.empty( ) )					 	  \
-			return;													 	  \
-																		  \
-		memcpy( m_raw_data, buffer.data( ), sizeof m_data );		 	  \
-	}																 	  \
-																	 	  \
-	union {															 	  \
-		packet_struct	m_data;										 	  \
-		char			m_raw_data[ sizeof packet_struct ];				  \
-	};																	  \
-};																		
+*/																
 
 namespace forceinline::remote {
+	// A dynamic data buffer.
+	class data_buffer {
+	public:
+		template < typename T >
+		void write( T data ) {
+			m_buffer.insert( m_buffer.end( ), &data, &data + sizeof T );
+		}
+
+		template < typename T >
+		void write_array( const std::vector< T >& data_array ) {
+			auto length = data_array.size( );
+			m_buffer.insert( m_buffer.end( ), sizeof length, 0 );
+
+			memcpy( m_buffer.data( ) + m_buffer.size( ) - sizeof length, &length, sizeof length );
+			m_buffer.insert( m_buffer.end( ), data_array.data( ), data_array.data( ) + data_array.size( ) * sizeof T );
+		}
+
+		template < typename T >
+		T read( ) {
+			auto data = *reinterpret_cast< T* >( m_buffer.data( ) + m_bytes_read );
+			m_bytes_read += sizeof( T );
+			return data;
+		}
+
+		template < typename T >
+		std::vector< T > read_array( ) {
+			auto length = read< std::size_t >( );
+
+			std::vector< T > data_array( length );
+			memcpy( data_array.data( ), m_buffer.data( ) + m_bytes_read, length * sizeof T );
+			m_bytes_read += length * sizeof T;
+
+			return data_array;
+		}
+
+		void clear( ) {
+			m_buffer.clear( );
+			m_bytes_read = 0;
+		}
+
+		void set_buffer( std::vector< char >& buffer ) {
+			m_bytes_read = 0;
+			m_buffer = buffer;
+		}
+
+		char* data( ) {
+			return m_buffer.data( );
+		}
+
+		std::uint16_t length( ) {
+			return m_buffer.size( );
+		}
+
+	private:
+		std::size_t m_bytes_read = 0;
+		std::vector< char > m_buffer = { };
+	};
+
 	class base_packet {
 	public:
 		// This method returns a pointer to the raw data of our packet
@@ -67,33 +86,51 @@ namespace forceinline::remote {
 		virtual void read( std::vector< char >& buffer ) = 0;
 
 		// This method returns our packet ID
-		virtual std::uint16_t id( ) {
-			return m_packet_id;
+		virtual std::uint16_t id( ) = 0;
+	};
+
+	template < typename T, std::uint16_t pkt_id = -1 >
+	class base_dynamic_packet : public base_packet {
+	public:
+		base_dynamic_packet( ) { }
+
+		virtual std::uint16_t size( ) {
+			return m_buffer.length( );
 		}
 
+		virtual std::uint16_t id( ) {
+			return pkt_id;
+		}
+
+		// Used to access our packet data
+		T& operator()( ) {
+			return m_packet_data;
+		}
+		
+		virtual char* data( ) { return nullptr; }
+		virtual void read( std::vector< char >& buffer ) { }
+
 	protected:
-		std::uint16_t m_packet_id = 0;
-
-	private:
-
+		T m_packet_data = { };
+		data_buffer m_buffer = { };
 	};
 
 	/*
-		This is an enum which defines the IDs of our packets. You don't have to use
-		one, however it is easier to utilize the IDs when setting packet handlers
-		later on.
+		This is an enum which defines the packet IDs. These will be used later on for identification when the
+		server receives a packet.
 
-		Keep one thing in mind however; a packet ID shall never be 0 or lower.
+		Keep one thing in mind however; a packet ID shall never be 0 or lower as ID 0 is reserved for disconnect.
 	*/
 
 	enum packet_id : std::uint16_t {
-		simple = 1,
+		disconnect = 0, // Do NOT change this!
+		simple,
 		dynamic
 	};
 
 	/*
 		Example packets:
-		First one is a simple packet which can be implemented with the given macro.
+		First one is a simple packet which can be implemented with the below given class.
 
 		The second packet has items of varying size. It shows an example of
 		how such a packet could be sent and specifically read.
@@ -101,11 +138,11 @@ namespace forceinline::remote {
 		----------------------------------------------------------------------------------
 
 		First we define structs that our packets will use. For ease of use, all structs
-		and classes shall be prefixed with "packet_". If you don't like that, choose a 
+		and classes shall be prefixed with "packet_". If you don't like that, choose a
 		different naming scheme or none at all, your choice.
 
 		The first struct is a simple, static size packet. Its size will never change,
-		which means we can just use the provided macro to implement it later on.
+		which means we can just use the provided class to use it later on.
 
 		The second struct features an std::vector. Its size varies, therefore we have
 		to send additional information to our server/client so it knows how to read the
@@ -114,9 +151,49 @@ namespace forceinline::remote {
 		----------------------------------------------------------------------------------
 
 		Here we are implementing the basic packet.
-		
+
 		First we define a struct which does not contain any dynamic sized items.
 	*/
+
+	// Use this class when sending a packet which always has a static size. Example use will be shown below.
+	template < typename T, const std::uint16_t pkt_id >
+	class simple_packet : public base_packet {
+	public:
+		// Constructor for receiving
+		simple_packet( std::vector< char >& packet_data ) {
+			read( packet_data );
+		}
+
+		// Constructor for sending
+		simple_packet( T packet_data ) : m_packet_data( packet_data ) { }
+
+		virtual char* data( ) {
+			return reinterpret_cast< char* >( &m_packet_data );
+		}
+
+		virtual std::uint16_t size( ) {
+			return sizeof T;
+		}
+
+		virtual void read( std::vector< char >& buffer ) {
+			if ( buffer.size( ) < this->size( ) )
+				return;
+
+			memcpy( &m_packet_data, buffer.data( ), this->size( ) );
+		}
+
+		virtual std::uint16_t id( ) {
+			return pkt_id;
+		}
+
+		// Used to access our packet data
+		T& operator()( ) {
+			return m_packet_data;
+		}
+
+	private:
+		T m_packet_data = { };
+	};
 
 	struct packet_simple_t {
 		std::uint32_t some_number = 0;
@@ -125,22 +202,14 @@ namespace forceinline::remote {
 	};
 
 	/*
-		Because we have a basic packet with a static size, we can use the above provided
-		macro to implement the class that will handle sending and receiving it.
-	*/
+		Example usage:
+		auto packet = remote::simple_packet< remote::packet_simple_t, remote::packet_id::simple >( my_struct );
 
-	create_packet_basic( packet_simple, packet_simple_t, packet_id::simple );
-
-	/*
-		Now we will implement the dynamic packet. As an example I have chosen an
-		std::vector because it is a container that I like to use.
-
-		I decided to prefix the container data with the container size, so our receiving
-		end knows how much data to copy from the buffer into its container.
+		Now we will implement the dynamic packet. As an example I have chosen an std::vector because it is a 
+		container that I like to use.
 	*/
 
 	struct packet_dynamic_t {
-		std::uint32_t container_length = 0;
 		std::vector< std::uint8_t > some_container = { };
 	};
 
@@ -156,61 +225,30 @@ namespace forceinline::remote {
 		packet handler.
 	*/
 
-	class packet_dynamic : public base_packet {
+	class dynamic_packet : public base_dynamic_packet< packet_dynamic_t, packet_id::dynamic > {
 	public:
-		default_packet_constructors( packet_dynamic, packet_dynamic_t, packet_id::dynamic );
-
-		~packet_dynamic( ) {
-			if ( m_raw_data )
-				delete[ ] m_raw_data;
+		dynamic_packet( packet_dynamic_t packet_data ) { 
+			m_packet_data = packet_data; 
+			this->data( ); // So the packet size gets set
 		}
+		
+		dynamic_packet( std::vector< char >& packet_data ) { read( packet_data ); }
 
+		// We only have to override the .data( ) and .read( ) methods
 		virtual char* data( ) {
-			//Create a buffer, remember to deallocate it in our deconstructor
-			if ( !m_raw_data )
-				m_raw_data = new char[ size( ) ];
+			// Clear the buffer first
+			m_buffer.clear( );
 
-			m_data.container_length = m_data.some_container.size( );
-
-			//Copy the size of the container and its data into the buffer
-			memcpy( m_raw_data, &m_data.container_length, sizeof std::uint32_t );
-			memcpy( m_raw_data + sizeof std::uint32_t, m_data.some_container.data( ), m_data.some_container.size( ) * sizeof std::uint8_t );
-
-			return m_raw_data;
-		}
-
-		virtual std::uint16_t size( ) {
-			//Calculate size just once as our data will never change
-			if ( !m_packet_size ) {
-				//Add all items together
-				m_packet_size += sizeof std::uint32_t;
-				m_packet_size += m_data.some_container.size( ) * sizeof std::uint8_t;
-			}
-			
-			//Return packet size
-			return m_packet_size;
+			// Write into our buffer
+			m_buffer.write_array< std::uint8_t >( m_packet_data.some_container );
+		
+			// Return the data
+			return m_buffer.data( );
 		}
 
 		virtual void read( std::vector< char >& buffer ) {
-			//See how many elements our container has
-			m_data.container_length = *reinterpret_cast< std::uint32_t* >( buffer.data( ) );
-			
-			//Resize our container accordingly
-			m_data.some_container.resize( m_data.container_length, 0 );
-			
-			//Copy the container data into our container
-			memcpy( m_data.some_container.data( ), buffer.data( ) + sizeof std::uint32_t, m_data.container_length * sizeof std::uint8_t );
+			m_buffer.set_buffer( buffer );
+			m_packet_data.some_container = m_buffer.read_array< std::uint8_t >( );
 		}
-
-		packet_dynamic_t get_packet( ) {
-			//Return a copy of our packet
-			return m_data;
-		}
-
-	private:
-		packet_dynamic_t m_data = { };
-		char* m_raw_data = nullptr;
-
-		std::uint16_t m_packet_size = 0;
 	};
 }

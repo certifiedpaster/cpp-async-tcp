@@ -57,8 +57,11 @@ namespace forceinline::remote {
 		m_connected = false;
 
 		// Wait for our threads to finish
-		m_receive_thread.join( );
-		m_process_thread.join( );
+		if ( m_receive_thread.joinable( ) )
+			m_receive_thread.join( );
+		
+		if ( m_process_thread.joinable( ) )
+			m_process_thread.join( );
 
 		// Tell the server we disconnected
 		if ( m_socket ) {

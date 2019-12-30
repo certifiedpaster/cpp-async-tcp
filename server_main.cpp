@@ -1,17 +1,37 @@
 #include "server/server.h"
 #include <iostream>
 
-int pkt = 0;
-void handler_packet_simple( SOCKET from, std::vector< char > buffer, forceinline::remote::async_server* server ) {
-	forceinline::remote::packet_simple packet( buffer );
-	printf( "%i | %i\n", ++pkt, packet.m_data.some_number );
+#define print_var(x) (printf("%s: %s\n", #x, std::to_string(x).data()))
+
+namespace remote = forceinline::remote;
+
+void handler_packet_simple( SOCKET from, std::vector< char > buffer, remote::async_server* server ) {
+	remote::simple_packet< remote::packet_simple_t, remote::packet_id::simple > packet( buffer );
+	
+	print_var( packet( ).some_float );
+	print_var( packet( ).some_number );
+	print_var( packet( ).some_array[ 1 ] );
+	printf( "\n" );
+
+	server->send_packet( from, &packet );
+}
+
+void handler_packet_dynamic( SOCKET from, std::vector< char > buffer, remote::async_server* server ) {
+	remote::dynamic_packet packet( buffer );
+
+	print_var( packet( ).some_container[ 0 ] );
+	print_var( packet( ).some_container[ 1 ] );
+	print_var( packet( ).some_container[ 2 ] );
+	printf( "\n" );
+
 	server->send_packet( from, &packet );
 }
 
 int main( ) {
 	try {
-		forceinline::remote::async_server server( "1337" );
-		server.set_packet_handler( forceinline::remote::packet_id::simple, handler_packet_simple );
+		remote::async_server server( "1337" );
+		server.set_packet_handler( remote::packet_id::simple, handler_packet_simple );
+		server.set_packet_handler( remote::packet_id::dynamic, handler_packet_dynamic );
 
 		server.start( );
 		while ( server.is_running( ) ) {

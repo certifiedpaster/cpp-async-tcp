@@ -136,7 +136,7 @@ namespace forceinline::remote {
 		This function is used for when you ask for a packet. See the client's
 		implementation for an explanation.
 	*/
-	void async_client::request_packet( SOCKET to, std::uint16_t packet_id ) {
+	void async_server::request_packet( SOCKET to, std::uint16_t packet_id ) {
 		std::vector< char > packet_buffer( 2 * sizeof std::uint16_t );
 
 		memset( packet_buffer.data( ), 0, packet_buffer.size( ) );
