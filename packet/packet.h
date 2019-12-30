@@ -21,7 +21,8 @@ namespace forceinline::remote {
 	public:
 		template < typename T >
 		void write( T data ) {
-			m_buffer.insert( m_buffer.end( ), &data, &data + sizeof T );
+			m_buffer.insert( m_buffer.end( ), sizeof T, 0 );
+			memcpy( m_buffer.data( ) + m_buffer.size( ) - sizeof T, &data, sizeof data );
 		}
 
 		template < typename T >
