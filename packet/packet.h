@@ -2,18 +2,18 @@
 #include <vector>
 
 /*
- 	IMPORTANT NOTE:
- 	It is recommended to share this file between server and client. This means,
- 	you should link to this exact file in both of your projects for both the
- 	client and server to have the same packet information at all times.
-	
+	IMPORTANT NOTE:
+	It is recommended to share this file between server and client. This means,
+	you should link to this exact file in both of your projects for both the
+	client and server to have the same packet information at all times.
+
 	Example packet layout (x = 1 byte)
-	[	
+	[
 		xx		type: uint16, specifies packet id
 		xx		type: uint16, specifies packet data length
 		xx...	type: uint8[], byte array with length of above mentioned length
 	]
-*/																
+*/
 
 namespace forceinline::remote {
 	// A dynamic data buffer.
@@ -21,16 +21,12 @@ namespace forceinline::remote {
 	public:
 		template < typename T >
 		void write( T data ) {
-			m_buffer.insert( m_buffer.end( ), sizeof T, 0 );
-			memcpy( m_buffer.data( ) + m_buffer.size( ) - sizeof T, &data, sizeof data );
+			m_buffer.insert( m_buffer.end( ), reinterpret_cast< char* >( &data ), reinterpret_cast< char* >( &data ) + sizeof T );
 		}
 
 		template < typename T >
 		void write_array( const std::vector< T >& data_array ) {
-			auto length = data_array.size( );
-			m_buffer.insert( m_buffer.end( ), sizeof length, 0 );
-
-			memcpy( m_buffer.data( ) + m_buffer.size( ) - sizeof length, &length, sizeof length );
+			write< std::size_t >( data_array.size( ) );
 			m_buffer.insert( m_buffer.end( ), data_array.data( ), data_array.data( ) + data_array.size( ) * sizeof T );
 		}
 
@@ -55,6 +51,7 @@ namespace forceinline::remote {
 		void clear( ) {
 			m_buffer.clear( );
 			m_bytes_read = 0;
+			m_filled = false;
 		}
 
 		void set_buffer( std::vector< char >& buffer ) {
@@ -70,7 +67,16 @@ namespace forceinline::remote {
 			return m_buffer.size( );
 		}
 
+		bool filled( ) {
+			return m_filled;
+		}
+
+		void set_filled( bool filled ) {
+			m_filled = filled;
+		}
+
 	private:
+		bool m_filled = false;
 		std::size_t m_bytes_read = 0;
 		std::vector< char > m_buffer = { };
 	};
@@ -82,7 +88,7 @@ namespace forceinline::remote {
 
 		// This method returns the size of our packet
 		virtual std::uint16_t size( ) = 0;
-		
+
 		// This method converts our buffer into usable data
 		virtual void read( std::vector< char >& buffer ) = 0;
 
@@ -107,7 +113,12 @@ namespace forceinline::remote {
 		T& operator()( ) {
 			return m_packet_data;
 		}
-		
+
+		void set_packet_data( const T& packet_data ) {
+			m_buffer.clear( );
+			m_packet_data = packet_data;
+		}
+
 		virtual char* data( ) { return nullptr; }
 		virtual void read( std::vector< char >& buffer ) { }
 
@@ -206,7 +217,7 @@ namespace forceinline::remote {
 		Example usage:
 		auto packet = remote::simple_packet< remote::packet_simple_t, remote::packet_id::simple >( my_struct );
 
-		Now we will implement the dynamic packet. As an example I have chosen an std::vector because it is a 
+		Now we will implement the dynamic packet. As an example I have chosen an std::vector because it is a
 		container that I like to use.
 	*/
 
@@ -228,21 +239,21 @@ namespace forceinline::remote {
 
 	class dynamic_packet : public base_dynamic_packet< packet_dynamic_t, packet_id::dynamic > {
 	public:
-		dynamic_packet( packet_dynamic_t packet_data ) { 
-			m_packet_data = packet_data; 
+		dynamic_packet( packet_dynamic_t packet_data ) {
+			m_packet_data = packet_data;
 			this->data( ); // So the packet size gets set
 		}
-		
+
 		dynamic_packet( std::vector< char >& packet_data ) { read( packet_data ); }
 
 		// We only have to override the .data( ) and .read( ) methods
 		virtual char* data( ) {
-			// Clear the buffer first
-			m_buffer.clear( );
+			// Write into our buffer if we haven't done it yet
+			if ( !m_buffer.filled( ) ) {
+				m_buffer.write_array< std::uint8_t >( m_packet_data.some_container );
+				m_buffer.set_filled( true );
+			}
 
-			// Write into our buffer
-			m_buffer.write_array< std::uint8_t >( m_packet_data.some_container );
-		
 			// Return the data
 			return m_buffer.data( );
 		}
