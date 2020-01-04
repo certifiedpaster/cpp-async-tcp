@@ -18,8 +18,10 @@ namespace forceinline::remote {
 		if ( m_running )
 			throw std::exception( "async_server::start: already running" );
 
+	#ifdef WIN32
 		if ( WSAStartup( MAKEWORD( 2, 2 ), &m_wsa_data ) != 0 )
 			throw std::exception( "async_server::start: WSAStartup call failed" );
+	#endif // WIN32
 
 		struct addrinfo* result, hints;
 		ZeroMemory( &hints, sizeof( hints ) );
@@ -89,7 +91,9 @@ namespace forceinline::remote {
 		// Erase all our clients
 		m_connected_clients.clear( );
 
+	#ifdef WIN32
 		WSACleanup( );
+	#endif // WIN32
 	}
 
 	bool async_server::is_running( ) {
@@ -103,52 +107,70 @@ namespace forceinline::remote {
 			m_packet_handlers.erase( packet_id );
 	}
 
-	void async_server::send_packet( SOCKET to, base_packet* packet ) {
+	void async_server::send_packet( SOCKET to, packets::packet_base::base_packet* packet ) {
+		send_packet_internal( to, packet, packet->flags( ) );
+	}
+
+	bool async_server::send_packet( SOCKET to, packets::packet_base::base_packet* packet, std::function< bool( SOCKET, const std::vector< char >&, const std::uint8_t ) > handler, std::chrono::milliseconds timeout ) {
+		// Latest packet handler. In range of 1-127
+		std::uint8_t packet_identifier = generate_packet_identifier( to );
+
+		// Send the packet with according flags
+		send_packet_internal( to, packet, packet_identifier );
+
+		auto now = [ ]( ) {
+			return std::chrono::high_resolution_clock::now( );
+		};
+
+		// Wait for the packet to arrive within timeout limit		
+		auto time_sent = now( );
+		bool handler_result = false;
+		do {
+			m_custom_mtx.lock( );
+
+			auto& queue = m_custom_process_queue[ to ];
+
+			// See if we have a response packet queued
+			auto it = std::find_if( queue.begin( ), queue.end( ), [ packet_identifier ]( const custom_process_info_t& info ) {
+				return info.packet_identifier == packet_identifier;
+			} );
+
+			// Call the handler if a packet has been found
+			if ( it != queue.end( ) ) {
+				handler_result = handler( to, it->packet_data, it->packet_identifier | 0b10000000 );
+				queue.erase( it );
+				m_custom_mtx.unlock( );
+				break;
+			}
+
+			std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+		} while ( std::chrono::duration_cast< std::chrono::milliseconds >( now( ) - time_sent ) <= timeout );
+
+		m_custom_mtx.unlock( );
+		remove_packet_identifier( to, packet_identifier );
+		return handler_result;
+	}
+
+	void async_server::send_packet_internal( SOCKET to, packets::packet_base::base_packet* packet, std::uint8_t packet_flags ) {
 		// Return if our packet is invalid or we have no one to send our packet to
 		if ( !to || !packet )
 			return;
 
+		packet_header_t header( packet );
+
+		// Set the packet flags if they don't match
+		if ( packet->flags( ) != packet_flags )
+			header.packet_flags = packet_flags;
+
+		// Allocate a buffer into which we copy our packet data
+		std::vector< char > packet_buffer( sizeof packet_header_t + header.packet_size );
+
+		// Copy the header and packet data into the buffer
+		memcpy( packet_buffer.data( ), &header, sizeof packet_header_t );
+		memcpy( packet_buffer.data( ) + sizeof packet_header_t, packet->data( ), header.packet_size );
+
 		// Lock the mutex
-		std::unique_lock lock( m_send_mtx );
-
-		// Grab our packet size and ID
-		auto packet_id = packet->id( );
-		auto packet_size = packet->size( );
-
-		// Allocate a buffer so into which we copy our packet data
-		std::vector< char > packet_buffer( packet_size + 2 * sizeof std::uint16_t );
-
-		// Set packet ID and packet length
-		memcpy( packet_buffer.data( ), &packet_id, sizeof std::uint16_t );
-		memcpy( packet_buffer.data( ) + sizeof std::uint16_t, &packet_size, sizeof std::uint16_t );
-
-		// Finally copy our packet data into the buffer
-		memcpy( packet_buffer.data( ) + 2 * sizeof std::uint16_t, packet->data( ), packet_size );
-
-		// Try to send our buffer
-		std::size_t bytes_sent = 0, total_bytes_sent = 0;
-		do {
-			bytes_sent = send( to, packet_buffer.data( ) + total_bytes_sent, packet_buffer.size( ) - total_bytes_sent, NULL );
-			total_bytes_sent += bytes_sent;
-		} while ( bytes_sent > 0 && total_bytes_sent < packet_buffer.size( ) );
-
-		// An error occurred, remove the client
-		if ( bytes_sent <= 0 )
-			close_client_connection( to );
-	}
-
-	/*
-		This function is used for when you ask for a packet. See the client's
-		implementation for an explanation.
-	*/
-	void async_server::request_packet( SOCKET to, std::uint16_t packet_id ) {
-		std::vector< char > packet_buffer( 2 * sizeof std::uint16_t );
-
-		memset( packet_buffer.data( ), 0, packet_buffer.size( ) );
-		memcpy( packet_buffer.data( ), &packet_id, sizeof std::uint16_t );
-
-		// Lock the send function for other threads until we're done
-		std::unique_lock lock( m_send_mtx );
+		std::lock_guard lock( m_send_mtx );
 
 		// Try to send our buffer
 		std::size_t bytes_sent = 0, total_bytes_sent = 0;
@@ -174,7 +196,7 @@ namespace forceinline::remote {
 				continue;
 
 			// Lock mutex
-			std::unique_lock lock( m_client_mtx );
+			std::lock_guard lock( m_client_mtx );
 
 			// Add the client to our list
 			m_connected_clients.push_back( client );
@@ -186,7 +208,7 @@ namespace forceinline::remote {
 		std::vector< char > temporary_buffer( m_buffer_size );
 
 		while ( m_running ) {
-			std::unique_lock cl_lock( m_client_mtx );
+			std::lock_guard cl_lock( m_client_mtx );
 
 			// Loop over all our connected clients
 			for ( auto& client : m_connected_clients ) {
@@ -206,7 +228,7 @@ namespace forceinline::remote {
 					}
 
 					// Lock mutex
-					std::unique_lock pp_lock( m_process_mtx );
+					std::lock_guard pp_lock( m_process_mtx );
 
 					// Get the client buffer and fill it with the data we received
 					auto& packet_buffer = m_packet_queue[ client ];
@@ -222,40 +244,55 @@ namespace forceinline::remote {
 	void async_server::process_packets( ) {
 		while ( m_running ) {
 			std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
-			std::unique_lock lock( m_process_mtx );
+			std::lock_guard lock( m_process_mtx );
 
 			// Process any packets
 			for ( auto& to_process : m_packet_queue ) {
-				auto& packet_buffer = to_process.second;
+				auto& from = to_process.first;
+				auto& packet_buffer = to_process.second;		
 
 				// Check if we have at least a packet header stored
-				if ( packet_buffer.size( ) < 2 * sizeof std::uint16_t )
+				if ( packet_buffer.size( ) < sizeof packet_header_t )
 					continue;
 
 				// We have something to process, get the information about our packet
-				std::uint32_t packet_information = *reinterpret_cast< std::uint32_t* >( packet_buffer.data( ) );
-
-				// Packet ID is in the first 2 bytes while its size is in the following 2
-				std::uint16_t packet_id = packet_information & 0xFFFF;
-				std::uint16_t packet_size = ( packet_information >> 16 );
+				auto header = *reinterpret_cast< packet_header_t* >( packet_buffer.data( ) );
 
 				// Add the first 4 bytes to our packet size
-				std::uint16_t total_packet_size = packet_size + 2 * sizeof std::uint16_t;
+				std::uint16_t total_packet_size = sizeof packet_header_t + header.packet_size;
 
 				// Do we have a whole packet stored?
 				if ( packet_buffer.size( ) < total_packet_size )
 					continue;
 
 				// Does our packet have a handler?
-				if ( m_packet_handlers.find( packet_id ) != m_packet_handlers.end( ) ) {
+				if ( m_packet_handlers.find( header.packet_id ) != m_packet_handlers.end( ) || header.packet_flags & 0b10000000 /* Custom handler */ ) {
 					// Erase the packet header
-					packet_buffer.erase( packet_buffer.begin( ), packet_buffer.begin( ) + 2 * sizeof std::uint16_t );
+					packet_buffer.erase( packet_buffer.begin( ), packet_buffer.begin( ) + sizeof packet_header_t );
 
-					// Call the handler
-					m_packet_handlers[ packet_id ]( to_process.first /* Client socket */, packet_buffer, this );
+					// Add the packet to custom processing queue if marked as one
+					if ( header.packet_flags & 0b10000000 ) {
+						// Create an info structure
+						custom_process_info_t info( header.packet_flags & 0x7F /* Extract the packet identifier */ );
+
+						// Copy the packet buffer
+						info.packet_data = std::vector< char >( packet_buffer.begin( ), packet_buffer.begin( ) + header.packet_size );
+
+						std::lock_guard custom_lock( m_custom_mtx );
+
+						// Add it to the queue
+						m_custom_process_queue[ from ].push_back( info );
+					} else {
+						// If the packet has an identifier, mark it as an answer packet
+						if ( header.packet_flags & 0x7F )
+							header.packet_flags |= 0b10000000;
+
+						// Call the packet handler
+						m_packet_handlers[ header.packet_id ]( this, to_process.first /* from socket */, packet_buffer, header.packet_flags );
+					}
 
 					// Remove the packet from our queue
-					packet_buffer.erase( packet_buffer.begin( ), packet_buffer.begin( ) + packet_size );
+					packet_buffer.erase( packet_buffer.begin( ), packet_buffer.begin( ) + header.packet_size );
 				} else {
 					// Packet is invalid/has no handler, erase it
 					packet_buffer.erase( packet_buffer.begin( ), packet_buffer.begin( ) + total_packet_size );
@@ -265,8 +302,8 @@ namespace forceinline::remote {
 	}
 
 	void async_server::close_client_connection( SOCKET client ) {
-		std::unique_lock cl_lock( m_client_mtx );
-		std::unique_lock pp_lock( m_process_mtx );
+		std::lock_guard cl_lock( m_client_mtx );
+		std::lock_guard pp_lock( m_process_mtx );
 
 		// Find our clients position
 		auto queue_it = m_packet_queue.find( client );
@@ -286,4 +323,27 @@ namespace forceinline::remote {
 		// Remove our client
 		m_connected_clients.erase( conn_it );
 	}
-}
+
+	std::uint8_t async_server::generate_packet_identifier( SOCKET to ) {
+		// TODO: Don't assign packet identifiers if next one would be 1
+		auto& identifiers = m_packet_identifiers[ to ];
+
+		if ( identifiers.size( ) > 0 ) {
+			std::uint8_t last_identifier = identifiers.back( );
+			std::uint8_t next_identifier = ( ++last_identifier % 127 ) + 1; // 1-127
+			identifiers.push_back( next_identifier );
+
+			return next_identifier;
+		} else {
+			identifiers.push_back( 1 );
+			return 1;
+		}
+	}
+
+	void async_server::remove_packet_identifier( SOCKET to, std::uint8_t identifier ) {
+		auto& identifiers = m_packet_identifiers[ to ];
+		identifiers.erase( std::remove_if( identifiers.begin( ), identifiers.end( ), [ identifier ]( std::uint8_t id ) {
+			return id == identifier;
+		} ) );
+	}
+} // namespace forceinline::remote

@@ -1,39 +1,43 @@
-#include "server/server.h"
 #include <iostream>
-
-#define print_var(x) (printf("%s: %s\n", #x, std::to_string(x).data()))
+#include "server/server.h"
+#include "packet/packet.h"
 
 namespace remote = forceinline::remote;
-
-void handler_packet_simple( SOCKET from, std::vector< char > buffer, remote::async_server* server ) {
-	remote::simple_packet< remote::packet_simple_t, remote::packet_id::simple > packet( buffer );
-	
-	print_var( packet( ).some_float );
-	print_var( packet( ).some_number );
-	print_var( packet( ).some_array[ 1 ] );
-	printf( "\n" );
-
-	server->send_packet( from, &packet );
-}
-
-void handler_packet_dynamic( SOCKET from, std::vector< char > buffer, remote::async_server* server ) {
-	remote::dynamic_packet packet( buffer );
-
-	print_var( packet( ).some_container[ 0 ] );
-	print_var( packet( ).some_container[ 1 ] );
-	print_var( packet( ).some_container[ 2 ] );
-	printf( "\n" );
-
-	server->send_packet( from, &packet );
-}
+namespace packets = remote::packets;
 
 int main( ) {
 	try {
 		remote::async_server server( "1337" );
-		server.set_packet_handler( remote::packet_id::simple, handler_packet_simple );
-		server.set_packet_handler( remote::packet_id::dynamic, handler_packet_dynamic );
+
+		// Set the packet handlers beforehand
+		server.set_packet_handler( packets::packet_id::text_one, [ ]( remote::async_server* server, SOCKET from, const std::vector< char >& buffer, std::uint8_t flags ) {
+			packets::text_packet< packets::packet_id::text_one > packet( buffer, flags );
+			
+			std::cout << "[1] Client says: " << packet( ).some_string << std::endl;
+
+			// Set a response
+			packet( ).some_string = "Hello from server :)";
+
+			// Send a response
+			server->send_packet( from, &packet );
+		} );
+
+		server.set_packet_handler( packets::packet_id::text_two, [ ]( remote::async_server* server, SOCKET from, const std::vector< char >& buffer, std::uint8_t flags ) {
+			// Note the different packet id: we will send a different packet as a response.
+			packets::text_packet< packets::packet_id::text_two > packet( buffer, flags );
+
+			std::cout << "[2] Client says: " << packet( ).some_string << std::endl;
+
+			// Construct a response packet
+			auto response_data = packets::packet_random_num_t( { 0,  int( GetTickCount( ) ), 0 } );
+			packets::simple_packet< packets::packet_random_num_t, packets::packet_id::random_numbers > response_packet( response_data, flags );
+
+			// Send the response
+			server->send_packet( from, &response_packet );
+		} );
 
 		server.start( );
+
 		while ( server.is_running( ) ) {
 			std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
 		}
@@ -42,7 +46,9 @@ int main( ) {
 	} catch ( const std::exception& e ) {
 		std::cout << e.what( ) << std::endl;
 		std::cin.get( );
+		return 1;
 	}
 
 	return 0;
 }
+
